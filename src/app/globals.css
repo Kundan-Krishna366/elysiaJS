@@ -24,3 +24,32 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Blob Animation Keyframes */
+@keyframes blob {
+  0%, 100% { 
+    transform: translate(0, 0) scale(1) rotate(0deg); 
+  }
+  33% { 
+    transform: translate(30px, -50px) scale(1.1) rotate(120deg); 
+  }
+  66% { 
+    transform: translate(-20px, 20px) scale(0.9) rotate(240deg); 
+  }
+}
+
+.animate-blob {
+  animation: blob 20s ease-in-out infinite;
+}
+
+.animation-delay-2000 {
+  animation-delay: 2s;
+}
+
+.animation-delay-4000 {
+  animation-delay: 4s;
+}
+
+.animation-delay-6000 {
+  animation-delay: 6s;
+}

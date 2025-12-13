@@ -11,12 +11,14 @@ const THEBOYS = [
   "Starlight",
   "Homelander",
   "Black Noir",
+  "Stormfront",
+  "Queen Maeve"
 ];
 const STORAGE_KEY = "chat_username"
 
 const generateUsername = () => {
    const name = THEBOYS[Math.floor(Math.random() * THEBOYS.length)]
-   return `anonymous-${name}-${nanoid(3)}`
+   return `${name}`
 }
 export const useUsername = () => {
     const [username, setUsername] = useState("");
