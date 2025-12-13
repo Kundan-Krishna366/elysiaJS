@@ -24,7 +24,7 @@ const Page =() => {
   const [copyStatus,setCopyStatus] = useState("Copy")
   const [timeRemaining,setTimeRemaining] = useState< number | null >(null)
   
-  const {} = useMutation({
+  const {mutate: sendMessage} = useMutation({
     mutationFn: async ({text}:{text:string}) => {
       await api.messages.post({
         sender: username,text},{query: { roomId }} )
@@ -68,12 +68,14 @@ const Page =() => {
      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-green-500 animate-pulse">{">"}</span>
      <input autoFocus value={input} onChange={(e)=> setInput(e.target.value)} onKeyDown={(e)=>{
       if(e.key==="Enter" && input.trim()){
-        //send
+        sendMessage({text: input})
         inputRef.current?.focus()
       }
      }} type="text" placeholder="Type here" className="w-full bg-black border border-zinc-800 focus:border-zinc-700 focus:outline-none transition-colors text-zinc-100 placeholder:text-zinc-700 py-3 pl-8 pr-4 text-sm "/>
     </div>
-    <button className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded text-white font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">Send</button>
+    <button onClick={()=>{
+      sendMessage({text: input})
+    }} className="bg-green-600 hover:bg-green-700 px-6 py-3 rounded text-white font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer">Send</button>
     </div>
     </div>
   </main>
