@@ -132,23 +132,7 @@ const Page = () => {
     }
   }, [messages?.messages]);
 
-  useEffect(() => {
-    const handleResize = () => {
-      if (document.activeElement === inputRef.current) {
-        bottomRef.current?.scrollIntoView({ behavior: "auto" });
-      }
-    };
-    const viewport = window.visualViewport;
-    if (viewport) {
-      viewport.addEventListener("resize", handleResize);
-    }
-    return () => {
-      if (viewport) {
-        viewport.removeEventListener("resize", handleResize);
-      }
-    };
-  }, []);
-  
+
   const {mutate: sendMessage} = useMutation({
     mutationFn: async ({text}:{text:string}) => {
       const res = await api.messages.post({
@@ -245,16 +229,10 @@ const Page = () => {
     }
   }
 
-  const handleInputFocus = () => {
-    // Scroll to bottom when input is focused to prevent layout shifts hiding text
-    setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 120);
-  };
 
   return( 
-    <div className="flex flex-col h-[100vh] h-[100dvh] w-full overflow-hidden bg-black text-zinc-100 font-sans selection:bg-white selection:text-black">
-      <header className="shrink-0 h-12 sm:h-14 landscape:h-10 border-b border-zinc-900 bg-black/80 backdrop-blur-xl flex items-center justify-between pl-[calc(0.75rem+env(safe-area-inset-left,0px))] pr-[calc(0.75rem+env(safe-area-inset-right,0px))] sm:pl-[calc(1rem+env(safe-area-inset-left,0px))] sm:pr-[calc(1rem+env(safe-area-inset-right,0px))] md:px-6 z-20">
+    <div className="flex h-[100dvh] flex-col bg-black text-zinc-100 font-sans selection:bg-white selection:text-black">
+      <header className="shrink-0 h-12 sm:h-14 border-b border-zinc-900 bg-black/80 backdrop-blur-xl flex items-center justify-between px-4 md:px-6 z-20">
         <div className="flex items-center gap-2 sm:gap-6">
           <button 
             onClick={() => router.push('/')}
@@ -307,7 +285,7 @@ const Page = () => {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain pt-3 pb-3 sm:pt-4 sm:pb-4 pl-[calc(0.75rem+env(safe-area-inset-left,0px))] pr-[calc(0.75rem+env(safe-area-inset-right,0px))] sm:pl-[calc(1rem+env(safe-area-inset-left,0px))] sm:pr-[calc(1rem+env(safe-area-inset-right,0px))] md:px-6 md:py-6 bg-black relative">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain bg-black relative p-4 md:p-6">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#18181b_1px,transparent_1px),linear-gradient(to_bottom,#18181b_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none opacity-50"></div>
         
         <div className="max-w-3xl mx-auto space-y-3 sm:space-y-4 md:space-y-6 landscape:space-y-2.5 relative z-10">
@@ -373,14 +351,13 @@ const Page = () => {
         </div>
       </div>
 
-      <footer className="shrink-0 bg-black border-t border-zinc-900 pt-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] pl-[calc(0.75rem+env(safe-area-inset-left,0px))] pr-[calc(0.75rem+env(safe-area-inset-right,0px))] sm:pt-4 sm:pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:px-6 landscape:pt-1.5 landscape:pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] z-20">
+      <footer className="shrink-0 bg-black border-t border-zinc-900 p-4 md:p-6 z-20">
         <div className="max-w-3xl mx-auto flex gap-2 sm:gap-3 items-center">
           <input 
             ref={inputRef}
             value={input} 
             onChange={(e) => setInput(e.target.value)} 
             onKeyDown={handleKeyDown}
-            onFocus={handleInputFocus}
             type="text" 
             placeholder="Write a message..." 
             aria-label="Message input"
