@@ -191,9 +191,12 @@ const Page = () => {
     }
   });
    
-  const {mutate:destroyRoom} = useMutation({
+  const {mutate:destroyRoom, isPending: isDestroying} = useMutation({
     mutationFn: async () => {
       await api.room.delete(null,{query:{roomId}});
+    },
+    onSuccess: () => {
+      router.push("/?destroyed=true");
     }
   });
 
@@ -275,12 +278,17 @@ const Page = () => {
 
           <button 
             onClick={() => destroyRoom()} 
+            disabled={isDestroying}
             aria-label="Close session and purge data"
             title="Close Room"
-            className="flex items-center justify-center w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 text-[10px] font-medium uppercase tracking-wider text-red-500 hover:text-red-400 bg-red-950/20 hover:bg-red-900/30 rounded border border-red-900/30 hover:border-red-800/50 transition-all focus:outline-none focus:ring-2 focus:ring-red-900 relative cursor-pointer"
+            className="flex items-center justify-center w-8 h-8 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 text-[10px] font-medium uppercase tracking-wider text-red-500 hover:text-red-400 bg-red-950/20 hover:bg-red-900/30 rounded border border-red-900/30 hover:border-red-800/50 transition-all focus:outline-none focus:ring-2 focus:ring-red-900 relative cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            <span className="hidden sm:inline ml-1.5">Close</span>
+            {isDestroying ? (
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+            )}
+            <span className="hidden sm:inline ml-1.5">{isDestroying ? "Closing..." : "Close"}</span>
           </button>
         </div>
       </header>

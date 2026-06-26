@@ -26,10 +26,12 @@ const rooms = new Elysia({prefix:"/room"}).post("/", async()=>{
   })
 }).delete("/", async ({auth}) => {
   await Promise.all([
-    realtime.channel(auth.roomId).emit("chat.destroy",{isDestroyed:true}),
-    redis.del(`meta:${auth.roomId}`),
-    redis.del(`messages:${auth.roomId}`),
-    redis.del(`room:${auth.roomId}:users`)
+    realtime.channel(auth.roomId).emit("chat.destroy", { isDestroyed: true }),
+    redis.del(
+      `meta:${auth.roomId}`,
+      `messages:${auth.roomId}`,
+      `room:${auth.roomId}:users`
+    )
   ])
 }, {
   query: z.object({
