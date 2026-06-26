@@ -36,8 +36,8 @@ function Home() {
   }
 
   return (
-    <div className="min-h-screen min-h-dvh bg-black text-zinc-100 font-sans selection:bg-white selection:text-black flex flex-col">
-      <nav className="border-b border-zinc-900 bg-black/50 backdrop-blur-xl sticky top-0 z-50">
+    <div className="flex flex-col h-[100vh] h-[100dvh] w-full overflow-hidden bg-black text-zinc-100 font-sans selection:bg-white selection:text-black">
+      <nav className="shrink-0 border-b border-zinc-900 bg-black/50 backdrop-blur-xl sticky top-0 z-50">
         <div className="max-w-5xl mx-auto px-3 pl-[calc(0.75rem+env(safe-area-inset-left,0px))] pr-[calc(0.75rem+env(safe-area-inset-right,0px))] sm:px-6 h-12 sm:h-14 flex items-center justify-between">
           <button 
             onClick={() => router.push('/')}
@@ -170,7 +170,7 @@ function Home() {
         </div>
       </main>
 
-      <footer className="w-full py-4 sm:py-6 text-center mt-auto z-10 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
+      <footer className="shrink-0 w-full py-4 sm:py-6 text-center z-10 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
         <p className="text-[10px] text-zinc-600 font-mono select-none">UI // V2.0</p>
       </footer>
     </div>
