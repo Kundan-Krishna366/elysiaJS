@@ -28,7 +28,8 @@ const rooms = new Elysia({prefix:"/room"}).post("/", async()=>{
   await Promise.all([
     realtime.channel(auth.roomId).emit("chat.destroy",{isDestroyed:true}),
     redis.del(`meta:${auth.roomId}`),
-    redis.del(`messages:${auth.roomId}`)
+    redis.del(`messages:${auth.roomId}`),
+    redis.del(`room:${auth.roomId}:users`)
   ])
 }, {
   query: z.object({
@@ -37,14 +38,34 @@ const rooms = new Elysia({prefix:"/room"}).post("/", async()=>{
 })
 
 const messages = new Elysia({prefix:"/messages"})
-.use(authMiddleware).post("/",async({body,auth})=>{
+.use(authMiddleware).post("/",async({body,auth,set})=>{
   const {sender,text} = body
-  const {roomId} = auth
+  const {roomId, token} = auth
   
   const remaining = await redis.ttl(`meta:${roomId}`)
   
-  if(remaining === -2){
-    throw new Error("Room does not exist")
+  // Enforce username mapping to prevent sender spoofing
+  const usersKey = `room:${roomId}:users`
+  const storedUsername = await redis.hget<string>(usersKey, token)
+  
+  if (storedUsername) {
+    if (storedUsername !== sender) {
+      set.status = 400
+      return { error: "Sender name mismatch / Spoofing detected" }
+    }
+  } else {
+    // Check if this username is already claimed by another token
+    const allUsers = await redis.hgetall<Record<string, string>>(usersKey) || {}
+    const isTaken = Object.values(allUsers).includes(sender)
+    if (isTaken) {
+      set.status = 409
+      return { error: "Username already taken in this room" }
+    }
+    // Claim the username for this token
+    await redis.hset(usersKey, { [token]: sender })
+    if (remaining > 0) {
+      await redis.expire(usersKey, remaining)
+    }
   }
 
   const message: Message = {
