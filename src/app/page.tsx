@@ -38,7 +38,7 @@ function Home() {
   return (
     <div className="min-h-screen min-h-dvh bg-black text-zinc-100 font-sans selection:bg-white selection:text-black flex flex-col">
       <nav className="border-b border-zinc-900 bg-black/50 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-5xl mx-auto px-4 pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] sm:px-6 h-14 flex items-center justify-between">
+        <div className="max-w-5xl mx-auto px-3 pl-[calc(0.75rem+env(safe-area-inset-left,0px))] pr-[calc(0.75rem+env(safe-area-inset-right,0px))] sm:px-6 h-12 sm:h-14 flex items-center justify-between">
           <button 
             onClick={() => router.push('/')}
             className="flex items-center gap-2 hover:opacity-80 transition-opacity focus:outline-none focus:ring-2 focus:ring-zinc-700 rounded-sm"
@@ -52,7 +52,7 @@ function Home() {
         </div>
       </nav>
 
-      <main className="flex-1 flex flex-col items-center justify-center p-4 pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] sm:p-6 relative overflow-y-auto min-h-0">
+      <main className="flex-1 flex flex-col items-center justify-center p-3 pl-[calc(0.75rem+env(safe-area-inset-left,0px))] pr-[calc(0.75rem+env(safe-area-inset-right,0px))] sm:p-6 relative overflow-y-auto min-h-0">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#18181b_1px,transparent_1px),linear-gradient(to_bottom,#18181b_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none"></div>
         
         <div className="w-full max-w-[420px] relative z-10 flex flex-col gap-6 sm:gap-8 my-auto py-4">
@@ -170,7 +170,7 @@ function Home() {
         </div>
       </main>
 
-      <footer className="w-full py-6 text-center mt-auto z-10 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
+      <footer className="w-full py-4 sm:py-6 text-center mt-auto z-10 pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
         <p className="text-[10px] text-zinc-600 font-mono select-none">UI // V2.0</p>
       </footer>
     </div>
