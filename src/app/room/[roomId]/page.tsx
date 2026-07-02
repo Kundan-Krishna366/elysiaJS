@@ -18,6 +18,8 @@ function formatTimeRemaining(seconds: number){
   return `${mins}:${secs.toString().padStart(2,'0')}`;
 }
 
+const TYPING_TIMEOUT_MS = 2000;
+
 const Page = () => {
   const params = useParams();
   const roomId = params.roomId as string;
@@ -35,8 +37,11 @@ const Page = () => {
   const lastSubmitTime = useRef(0);
   const isFirstLoad = useRef(true);
 
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const isTypingRef = useRef(false);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    // Only autofocus on desktop/wider screens to prevent automatic keyboard popup on mobile entry
     if (inputRef.current && window.innerWidth >= 768) {
       inputRef.current.focus();
     }
@@ -44,16 +49,35 @@ const Page = () => {
 
   useEffect(() => {
     if (!isSubmitting && inputRef.current) {
-      // Only refocus if desktop, or if the input already has active focus
       if (window.innerWidth >= 768 || document.activeElement === inputRef.current) {
         inputRef.current.focus();
       }
     }
   }, [isSubmitting]);
 
-  // Clean up user token from Redis room connected metadata when they navigate away or close the tab
+  const sendTypingStatus = (isTyping: boolean, keepalive = false) => {
+    fetch(`/api/room/typing?roomId=${roomId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sender: username, isTyping }),
+      keepalive
+    }).catch(() => {});
+  };
+
+  const stopTyping = (keepalive = false) => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    if (isTypingRef.current) {
+      isTypingRef.current = false;
+      sendTypingStatus(false, keepalive);
+    }
+  };
+
   useEffect(() => {
     const leaveRoom = () => {
+      stopTyping(true);
       fetch(`/api/room/leave?roomId=${roomId}`, {
         method: "POST",
         keepalive: true
@@ -82,7 +106,6 @@ const Page = () => {
     }   
   });
 
-  // Sync TTL countdown state during rendering phase to avoid synchronous state updates in useEffect
   if (ttlData?.ttl !== undefined && ttlData.ttl !== prevTtl) {
     setPrevTtl(ttlData.ttl);
     setTimeRemaining(ttlData.ttl);
@@ -122,7 +145,6 @@ const Page = () => {
 
   useEffect(() => {
     if (bottomRef.current && messages?.messages) {
-      // Use instant scroll on initial load, smooth scroll for incoming messages
       if (isFirstLoad.current) {
         bottomRef.current.scrollIntoView({ behavior: "auto" });
         isFirstLoad.current = false;
@@ -132,6 +154,11 @@ const Page = () => {
     }
   }, [messages?.messages]);
 
+  useEffect(() => {
+    if (bottomRef.current && typingUsers.size > 0) {
+      bottomRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [typingUsers]);
 
   const {mutate: sendMessage} = useMutation({
     mutationFn: async ({text}:{text:string}) => {
@@ -167,14 +194,14 @@ const Page = () => {
       queryClient.setQueryData<MessagesData>(["messages", roomId], (old) => ({
         messages: old?.messages.filter((m) => m.id !== context?.optimisticMessage.id) || []
       }));
-      setInput(variables.text); // Restore the message text to input on failure
+      setInput(variables.text);
       setIsSubmitting(false);
     }
   });
   
   useRealtime({
     channels:[roomId],
-    events:["chat.message","chat.destroy"],
+    events:["chat.message","chat.destroy","chat.typing"],
     onData:({event, data})=>{
       if(event==="chat.message"){
         queryClient.setQueryData<MessagesData>(["messages", roomId], (old) => {
@@ -184,9 +211,27 @@ const Page = () => {
             messages: [...(old?.messages || []).filter((m) => !m.id.startsWith('temp-')), data]
           };
         });
+        setTypingUsers((prev) => {
+          if (!prev.has(data.sender)) return prev;
+          const next = new Set(prev);
+          next.delete(data.sender);
+          return next;
+        });
       }
       if(event==="chat.destroy"){
         router.push("/?destroyed=true");
+      }
+      if(event==="chat.typing"){
+        if (data.sender === username) return;
+        setTypingUsers((prev) => {
+          const next = new Set(prev);
+          if (data.isTyping) {
+            next.add(data.sender);
+          } else {
+            next.delete(data.sender);
+          }
+          return next;
+        });
       }
     }
   });
@@ -220,8 +265,9 @@ const Page = () => {
     if (!trimmedInput) return
     
     lastSubmitTime.current = now;
-    setInput(""); // Clear input immediately
+    setInput(""); 
     setIsSubmitting(true);
+    stopTyping(); 
     sendMessage({text: trimmedInput});
   }
 
@@ -232,6 +278,41 @@ const Page = () => {
     }
   }
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value);
+
+    if (e.target.value.trim().length === 0) {
+      stopTyping();
+      return;
+    }
+
+    if (!isTypingRef.current) {
+      isTypingRef.current = true;
+      sendTypingStatus(true);
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    typingTimeoutRef.current = setTimeout(() => {
+      stopTyping();
+    }, TYPING_TIMEOUT_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (isTypingRef.current) sendTypingStatus(false, true);
+    };
+  }, [roomId]);
+
+  const typingLabel = (() => {
+    const names = Array.from(typingUsers);
+    if (names.length === 0) return null;
+    if (names.length === 1) return `${names[0]} is typing`;
+    if (names.length === 2) return `${names[0]} and ${names[1]} are typing`;
+    return `${names.length} people are typing`;
+  })();
 
   return( 
     <div className="flex h-[100dvh] flex-col bg-black text-zinc-100 font-sans selection:bg-white selection:text-black">
@@ -355,6 +436,25 @@ const Page = () => {
               </div>
             </div>
           ))}
+
+          {typingLabel && (
+            <div className="flex gap-2 sm:gap-3 items-end animate-in fade-in duration-200">
+              <div className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded flex items-center justify-center text-[9px] sm:text-[10px] font-bold border bg-zinc-950 text-zinc-400 border-zinc-800">
+                {Array.from(typingUsers)[0]?.charAt(0).toUpperCase()}
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="text-[9px] sm:text-[10px] font-medium text-zinc-500 mb-0.5 sm:mb-1 px-0.5 select-none">
+                  {typingLabel}
+                </span>
+                <div className="px-3 py-2.5 sm:px-4 sm:py-3 rounded-lg border bg-zinc-900/80 border-zinc-800 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                  <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                  <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce"></span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div ref={bottomRef} />
         </div>
       </div>
@@ -364,7 +464,7 @@ const Page = () => {
           <input 
             ref={inputRef}
             value={input} 
-            onChange={(e) => setInput(e.target.value)} 
+            onChange={handleInputChange} 
             onKeyDown={handleKeyDown}
             type="text" 
             placeholder="Write a message..." 
