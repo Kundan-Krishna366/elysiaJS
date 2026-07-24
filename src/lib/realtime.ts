@@ -8,6 +8,7 @@ const message = z.object({
             text: z.string(),
             timestamp: z.number(),
             roomId: z.string(),
+            clientId: z.string().optional(),
             token: z.string().optional()
 })
 

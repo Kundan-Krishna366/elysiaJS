@@ -4,16 +4,21 @@ import { redis } from '@/lib/redis'
 import { authMiddleware } from './auth'
 import { z } from 'zod'
 import { Message, realtime } from '@/lib/realtime'
+import { claimUsername } from '@/lib/room-identity'
+import { isWithinRateLimit } from '@/lib/rate-limit'
+
+export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 const rooms = new Elysia({prefix:"/room"}).post("/", async()=>{
 const roomId = nanoid()
-await Promise.all([
-    redis.hset(`meta:${roomId}`,{
+const room = redis.pipeline()
+room.hset(`meta:${roomId}`,{
       connected:[],
       createdAt: Date.now()
-}),
-    redis.expire(`meta:${roomId}`, 60*30)
-  ])
+})
+room.expire(`meta:${roomId}`, 60*30)
+await room.exec()
 return {roomId}
 }).use(authMiddleware).get("/bootstrap",async({auth})=>{
 const [ttl, messages] = await Promise.all([
@@ -27,13 +32,6 @@ return {
     token: message.token === auth.token ? auth.token : undefined,
   })),
 }
-}).get("/ttl",async({auth})=>{
-const ttl = await redis.ttl(`meta:${auth.roomId}`)
-return {ttl: ttl>0?ttl:0}
-},{
-  query: z.object({
-    roomId: z.string()
-})
 }).delete("/", async ({auth}) => {
 await Promise.all([
     realtime.channel(auth.roomId).emit("chat.destroy", { isDestroyed: true }),
@@ -51,45 +49,55 @@ await Promise.all([
 
 const messages = new Elysia({prefix:"/messages"})
 .use(authMiddleware).post("/",async({body,auth,set})=>{
-const {sender,text} = body
+const {sender,text,clientId} = body
 const {roomId, token} = auth
 const usersKey = `room:${roomId}:users`
-// These reads do not depend on one another. Keeping them parallel removes one
-// Redis network round trip from every message send.
-const [remaining, storedUsername] = await Promise.all([
-  redis.ttl(`meta:${roomId}`),
-  redis.hget<string>(usersKey, token)
+const [allowed, [remaining, storedUsername]] = await Promise.all([
+  isWithinRateLimit(`rate:${roomId}:${token}:messages`, 4, 1),
+  Promise.all([
+    redis.ttl(`meta:${roomId}`),
+    redis.hget<string>(usersKey, token),
+  ]),
 ])
+if (!allowed) {
+  set.status = 429
+  return { error: "Too many messages" }
+}
+if (remaining <= 0) {
+  set.status = 404
+  return { error: "Room has expired" }
+}
 if (storedUsername) {
 if (storedUsername !== sender) {
       set.status = 400
 return { error: "Sender name mismatch / Spoofing detected" }
 }
 } else {
-
-const allUsers = await redis.hgetall<Record<string, string>>(usersKey) || {}
-const isTaken = Object.values(allUsers).includes(sender)
-if (isTaken) {
+const usernameClaim = await claimUsername(roomId, token, sender, remaining)
+if (usernameClaim === "taken") {
       set.status = 409
 return { error: "Username already taken in this room" }
 }
-const registration = redis.pipeline()
-registration.hset(usersKey, { [token]: sender })
-if (remaining > 0) registration.expire(usersKey, remaining)
-await registration.exec()
+if (usernameClaim === "mismatch") {
+      set.status = 400
+return { error: "Sender name mismatch / Spoofing detected" }
+}
 }
 const message: Message = {
     id: nanoid(),
     sender,
     text,
     timestamp: Date.now(),
-    roomId
+    roomId,
+    clientId,
 }
+const persistence = redis.pipeline()
+persistence.rpush(`messages:${roomId}`,{...message, token: auth.token})
+persistence.expire(`messages:${roomId}`, remaining)
 await Promise.all([
-    redis.rpush(`messages:${roomId}`,{...message, token: auth.token}),
-    remaining > 0 ? redis.expire(`messages:${roomId}`, remaining) : null,
-    realtime.channel(roomId).emit("chat.message", message)
-  ])
+  persistence.exec(),
+  realtime.channel(roomId).emit("chat.message", message),
+])
 return { message }
 },
 {
@@ -98,7 +106,8 @@ return { message }
 }),
   body: z.object({
     sender: z.string().min(1).max(30),
-    text: z.string().min(1).max(1000)
+    text: z.string().trim().min(1).max(1000),
+    clientId: z.string().uuid()
 })
 }).get("/",async({auth})=>{
 const messages = await redis.lrange<Message>(`messages:${auth.roomId}`,0,-1)
@@ -119,30 +128,20 @@ return {
 const join = new Elysia({prefix:"/room/join"})
 .use(authMiddleware).post("/", async ({body, auth, set}) => {
   const { sender } = body
-  const usersKey = `room:${auth.roomId}:users`
-  const storedUsername = await redis.hget<string>(usersKey, auth.token)
-
-  if (storedUsername) {
-    if (storedUsername !== sender) {
-      set.status = 400
-      return { error: "Sender name mismatch / Spoofing detected" }
-    }
-    return { ok: true }
+  const remaining = await redis.ttl(`meta:${auth.roomId}`)
+  if (remaining <= 0) {
+    set.status = 404
+    return { error: "Room has expired" }
   }
-
-  const [allUsers, remaining] = await Promise.all([
-    redis.hgetall<Record<string, string>>(usersKey),
-    redis.ttl(`meta:${auth.roomId}`),
-  ])
-  if (Object.values(allUsers || {}).includes(sender)) {
+  const usernameClaim = await claimUsername(auth.roomId, auth.token, sender, remaining)
+  if (usernameClaim === "taken") {
     set.status = 409
     return { error: "Username already taken in this room" }
   }
-
-  const registration = redis.pipeline()
-  registration.hset(usersKey, { [auth.token]: sender })
-  if (remaining > 0) registration.expire(usersKey, remaining)
-  await registration.exec()
+  if (usernameClaim === "mismatch") {
+    set.status = 400
+    return { error: "Sender name mismatch / Spoofing detected" }
+  }
   return { ok: true }
 }, {
   query: z.object({ roomId: z.string() }),
@@ -150,13 +149,14 @@ const join = new Elysia({prefix:"/room/join"})
 })
 
 const typing = new Elysia({prefix:"/room/typing"})
-.use(authMiddleware).post("/", async ({body, auth}) => {
+.use(authMiddleware).post("/", async ({body, auth, set}) => {
 const {sender, isTyping} = body
 const {roomId, token} = auth
 
 const usersKey = `room:${roomId}:users`
 const storedUsername = await redis.hget<string>(usersKey, token)
-if (storedUsername && storedUsername !== sender) {
+if (storedUsername !== sender) {
+set.status = 400
 return { error: "Sender name mismatch / Spoofing detected" }
 }
 

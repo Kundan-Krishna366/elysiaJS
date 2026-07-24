@@ -4,13 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useUsername } from "@/hooks/use-username";
-import { format } from "date-fns";
 import { useRealtime } from "@/lib/realtime-client";
 import type { Message } from "@/lib/realtime";
-
-interface MessagesData {
-  messages: Message[];
-}
+import { RealtimeProvider } from "@upstash/realtime/client";
 
 interface RoomBootstrap {
   ttl: number;
@@ -23,10 +19,16 @@ function formatTimeRemaining(seconds: number){
   return `${mins}:${secs.toString().padStart(2,'0')}`;
 }
 
+function formatMessageTime(timestamp: number) {
+  const date = new Date(timestamp);
+  return `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+}
+
 const TYPING_TIMEOUT_MS = 2000;
 
 function RoomTimer({ ttl, onExpired }: { ttl: number | undefined; onExpired: () => void }) {
   const [timeRemaining, setTimeRemaining] = useState(ttl ?? null);
+  const lastTickAt = useRef<number | null>(null);
 
   useEffect(() => {
     if (timeRemaining === null) return;
@@ -35,8 +37,12 @@ function RoomTimer({ ttl, onExpired }: { ttl: number | undefined; onExpired: () 
       return;
     }
 
+    lastTickAt.current ??= Date.now();
     const timerId = setTimeout(() => {
-      setTimeRemaining((remaining) => remaining === null ? null : remaining - 1);
+      const now = Date.now();
+      const elapsedSeconds = Math.max(1, Math.floor((now - (lastTickAt.current ?? now)) / 1000));
+      lastTickAt.current = now;
+      setTimeRemaining((remaining) => remaining === null ? null : Math.max(0, remaining - elapsedSeconds));
     }, 1000);
 
     return () => clearTimeout(timerId);
@@ -49,7 +55,7 @@ function RoomTimer({ ttl, onExpired }: { ttl: number | undefined; onExpired: () 
   );
 }
 
-const Page = () => {
+const RoomPage = () => {
   const params = useParams();
   const roomId = params.roomId as string;
   const router = useRouter();
@@ -91,16 +97,16 @@ const Page = () => {
     }
   }, [isSubmitting]);
 
-  const sendTypingStatus = (isTyping: boolean, keepalive = false) => {
+  const sendTypingStatus = useCallback((isTyping: boolean, keepalive = false) => {
     fetch(`/api/room/typing?roomId=${roomId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sender: username, isTyping }),
       keepalive
     }).catch(() => {});
-  };
+  }, [roomId, username]);
 
-  const stopTyping = (keepalive = false) => {
+  const stopTyping = useCallback((keepalive = false) => {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
@@ -109,7 +115,7 @@ const Page = () => {
       isTypingRef.current = false;
       sendTypingStatus(false, keepalive);
     }
-  };
+  }, [sendTypingStatus]);
 
   useEffect(() => {
     const leaveRoom = () => {
@@ -120,7 +126,7 @@ const Page = () => {
       window.removeEventListener("beforeunload", leaveRoom);
       leaveRoom();
     };
-  }, [roomId]);
+  }, [stopTyping]);
 
   // One authenticated bootstrap replaces the former TTL and history request
   // waterfall. It also lets both Redis reads execute in parallel on the server.
@@ -139,6 +145,7 @@ const Page = () => {
        return res.data;
     },
     staleTime: Infinity,
+    retry: false,
   });
 
   const messages = roomData as RoomBootstrap | undefined;
@@ -161,39 +168,58 @@ const Page = () => {
   }, [typingUsers]);
 
   const {mutate: sendMessage} = useMutation({
-    mutationFn: async ({text}:{text:string}) => {
+    mutationFn: async ({text, clientId}:{text:string; clientId: string}) => {
       const res = await api.messages.post({
         sender: username,
-        text
+        text,
+        clientId,
       },{query: { roomId }});
-      if (res.error) {
+      const message = res.data?.message;
+      if (res.error || !message) {
         throw new Error("Failed to send message");
       }
-      return res.data;
+      return message;
     },
     onMutate: async (newMessage) => {
-      const optimisticMessage: Message & { token: string } = {
-        id: `temp-${Date.now()}`,
+      const optimisticMessage: Message = {
+        id: `temp-${newMessage.clientId}`,
         sender: username,
         text: newMessage.text,
         timestamp: Date.now(),
         roomId,
-        token: 'current'
+        clientId: newMessage.clientId,
       };
       
-      queryClient.setQueryData<MessagesData>(["messages", roomId], (old) => ({
-        messages: [...(old?.messages || []), optimisticMessage]
-      }));
+      queryClient.setQueryData<RoomBootstrap>(["messages", roomId], (old) => {
+        // The query cache is the complete room bootstrap, not a messages-only
+        // cache. Preserve ttl so an optimistic update cannot remount the timer.
+        if (!old) return old;
+        return {
+          ...old,
+          messages: [...old.messages, optimisticMessage],
+        };
+      });
       
       return { optimisticMessage };
     },
-    onSuccess: () => {
+    onSuccess: (message, _variables, context) => {
+      queryClient.setQueryData<RoomBootstrap>(["messages", roomId], (old) => {
+        if (!old || old.messages.some((current) => current.id === message.id)) return old;
+        return {
+          ...old,
+          messages: old.messages.map((current) => current.id === context?.optimisticMessage.id ? message : current),
+        };
+      });
       setIsSubmitting(false);
     },
     onError: (error, variables, context) => {
-      queryClient.setQueryData<MessagesData>(["messages", roomId], (old) => ({
-        messages: old?.messages.filter((m) => m.id !== context?.optimisticMessage.id) || []
-      }));
+      queryClient.setQueryData<RoomBootstrap>(["messages", roomId], (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          messages: old.messages.filter((message) => message.id !== context?.optimisticMessage.id),
+        };
+      });
       setInput(variables.text);
       setIsSubmitting(false);
     }
@@ -204,11 +230,18 @@ const Page = () => {
     events:["chat.message","chat.destroy","chat.typing"],
     onData:({event, data})=>{
       if(event==="chat.message"){
-        queryClient.setQueryData<MessagesData>(["messages", roomId], (old) => {
-          const exists = old?.messages.some((m) => m.id === data.id);
+        queryClient.setQueryData<RoomBootstrap>(["messages", roomId], (old) => {
+          if (!old) return old;
+          const exists = old.messages.some((m) => m.id === data.id);
           if (exists) return old;
+          const temporaryId = data.sender === username && data.clientId
+            ? `temp-${data.clientId}`
+            : undefined;
           return {
-            messages: [...(old?.messages || []).filter((m) => !m.id.startsWith('temp-')), data]
+            ...old,
+            messages: temporaryId && old.messages.some((message) => message.id === temporaryId)
+              ? old.messages.map((message) => message.id === temporaryId ? data : message)
+              : [...old.messages, data]
           };
         });
         setTypingUsers((prev) => {
@@ -268,7 +301,7 @@ const Page = () => {
     setInput(""); 
     setIsSubmitting(true);
     stopTyping(); 
-    sendMessage({text: trimmedInput});
+    sendMessage({text: trimmedInput, clientId: crypto.randomUUID()});
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -304,7 +337,7 @@ const Page = () => {
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       if (isTypingRef.current) sendTypingStatus(false, true);
     };
-  }, [roomId]);
+  }, [sendTypingStatus]);
 
   const typingLabel = (() => {
     const names = Array.from(typingUsers);
@@ -421,7 +454,7 @@ const Page = () => {
                   <span className={`text-[9px] sm:text-[10px] font-semibold truncate max-w-[120px] sm:max-w-[200px] ${msg.sender === username ? "text-white" : "text-zinc-400"}`} title={msg.sender === username ? "You" : msg.sender}>
                     {msg.sender === username ? "You" : msg.sender}
                   </span>
-                  <span className="text-[8px] sm:text-[9px] font-mono text-zinc-600">{format(msg.timestamp, "HH:mm")}</span>
+                  <span className="text-[8px] sm:text-[9px] font-mono text-zinc-600">{formatMessageTime(msg.timestamp)}</span>
                 </div>
                 
                 <div className={`px-3 py-2 sm:px-4 sm:py-2.5 rounded-lg text-sm leading-relaxed border transition-all break-words whitespace-pre-wrap ${
@@ -490,4 +523,10 @@ const Page = () => {
   )
 }
 
-export default Page;
+export default function Page() {
+  return (
+    <RealtimeProvider api={{ url: "/api/realtime", withCredentials: true }}>
+      <RoomPage />
+    </RealtimeProvider>
+  );
+}
