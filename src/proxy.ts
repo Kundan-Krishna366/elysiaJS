@@ -2,6 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { redis } from "@/lib/redis";
 import { nanoid } from "nanoid";
 
+// Keep admission in one Redis operation. The old read-then-write sequence made
+// every new room visit wait for two cross-region REST round trips and could let
+// concurrent requests overfill a room.
+const admitToRoom = `
+local connected = redis.call("HGET", KEYS[1], "connected")
+if not connected then return -1 end
+local tokens = cjson.decode(connected)
+for _, existing in ipairs(tokens) do
+  if existing == ARGV[1] then return 0 end
+end
+if #tokens >= 3 then return -2 end
+table.insert(tokens, ARGV[1])
+redis.call("HSET", KEYS[1], "connected", cjson.encode(tokens))
+return 1
+`;
+
 export const proxy = async (req: NextRequest)=> {
   const pathname = req.nextUrl.pathname;
   const roomMatch = pathname.match(/^\/room\/([^\/]+)$/);
@@ -17,35 +33,27 @@ export const proxy = async (req: NextRequest)=> {
 
   const roomId = roomMatch[1];
   
-  const meta = await redis.hgetall<{connected: string[],createdAt:number}>(`meta:${roomId}`);
+  const cookieName = `x-auth-token-${roomId}`;
+  const existingToken = req.cookies.get(cookieName)?.value;
+  const token = existingToken ?? nanoid();
+  const admission = await redis.eval<[string], number>(admitToRoom, [`meta:${roomId}`], [token]);
 
-  if(!meta){
+  if (admission === -1) {
     return NextResponse.redirect(new URL("/?error=room-not-found",req.url));
   }
-
-  const cookieName = `x-auth-token-${roomId}`;
-  const existingTokens = req.cookies.get(cookieName)?.value;
-  if(existingTokens && meta.connected.includes(existingTokens)){
-    return NextResponse.next();
-  }
-
-  if(meta.connected.length>=3){
+  if (admission === -2) {
     return NextResponse.redirect(new URL("/?error=room-full",req.url));
   }
 
   const response = NextResponse.next();
-  const token = nanoid();
-
-  response.cookies.set(cookieName,token,{
+  if (!existingToken) {
+    response.cookies.set(cookieName,token,{
     path:"/",
     httpOnly:true,
     secure:process.env.NODE_ENV==="production",
     sameSite:"strict"
-  });
-
-  await redis.hset(`meta:${roomId}`,{
-    connected: [...meta.connected, token]
-  });
+    });
+  }
   
   return response;
 };
@@ -53,4 +61,3 @@ export const proxy = async (req: NextRequest)=> {
 export const config = {
   matcher: "/room/:path*"
 };
-

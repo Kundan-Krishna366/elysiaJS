@@ -2,13 +2,18 @@
 import { api } from "@/lib/eden";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useUsername } from "@/hooks/use-username";
 import { format } from "date-fns";
 import { useRealtime } from "@/lib/realtime-client";
 import type { Message } from "@/lib/realtime";
 
 interface MessagesData {
+  messages: Message[];
+}
+
+interface RoomBootstrap {
+  ttl: number;
   messages: Message[];
 }
 
@@ -20,18 +25,41 @@ function formatTimeRemaining(seconds: number){
 
 const TYPING_TIMEOUT_MS = 2000;
 
+function RoomTimer({ ttl, onExpired }: { ttl: number | undefined; onExpired: () => void }) {
+  const [timeRemaining, setTimeRemaining] = useState(ttl ?? null);
+
+  useEffect(() => {
+    if (timeRemaining === null) return;
+    if (timeRemaining <= 0) {
+      onExpired();
+      return;
+    }
+
+    const timerId = setTimeout(() => {
+      setTimeRemaining((remaining) => remaining === null ? null : remaining - 1);
+    }, 1000);
+
+    return () => clearTimeout(timerId);
+  }, [timeRemaining, onExpired]);
+
+  return (
+    <span className={`text-xs font-mono font-semibold sm:font-medium leading-none ${timeRemaining !== null && timeRemaining < 60 ? "text-red-500 animate-pulse" : "text-zinc-300 sm:text-white"}`}>
+      {timeRemaining !== null ? formatTimeRemaining(timeRemaining) : "--:--"}
+    </span>
+  );
+}
+
 const Page = () => {
   const params = useParams();
   const roomId = params.roomId as string;
   const router = useRouter();
+  const handleRoomExpiry = useCallback(() => router.push("/?destroyed=true"), [router]);
   const queryClient = useQueryClient();
   const {username} = useUsername();
   const [input,setInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null); 
   const [copyStatus,setCopyStatus] = useState("Copy ID");
-  const [timeRemaining,setTimeRemaining] = useState< number | null >(null);
-  const [prevTtl, setPrevTtl] = useState<number | undefined>(undefined);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const lastSubmitTime = useRef(0);
@@ -46,6 +74,14 @@ const Page = () => {
       inputRef.current.focus();
     }
   }, []);
+
+  // This is deliberately non-blocking: the room can render and accept input
+  // immediately, while the one-time username claim finishes before a user
+  // normally sends their first message.
+  useEffect(() => {
+    if (!username) return;
+    void api.room.join.post({ sender: username }, { query: { roomId } });
+  }, [roomId, username]);
 
   useEffect(() => {
     if (!isSubmitting && inputRef.current) {
@@ -78,10 +114,6 @@ const Page = () => {
   useEffect(() => {
     const leaveRoom = () => {
       stopTyping(true);
-      fetch(`/api/room/leave?roomId=${roomId}`, {
-        method: "POST",
-        keepalive: true
-      });
     };
     window.addEventListener("beforeunload", leaveRoom);
     return () => {
@@ -90,58 +122,26 @@ const Page = () => {
     };
   }, [roomId]);
 
-  const {data: ttlData} = useQuery({
-    queryKey: ["ttl",roomId],
-    queryFn: async () => {
-       const res = await api.room.ttl.get({query:{roomId}});
-       if (res.error) {
-         if (res.status === 401) {
-           router.push("/?error=unauthorized");
-         } else {
-           router.push("/?error=room-not-found");
-         }
-         throw new Error("Failed to fetch TTL");
-       }
-       return res.data;
-    }   
-  });
-
-  if (ttlData?.ttl !== undefined && ttlData.ttl !== prevTtl) {
-    setPrevTtl(ttlData.ttl);
-    setTimeRemaining(ttlData.ttl);
-  }
-
-  useEffect(() => {
-    if (timeRemaining === null) return;
-    if (timeRemaining <= 0) {
-      router.push("/?destroyed=true");
-      return;
-    }
-
-    const timerId = setTimeout(() => {
-      setTimeRemaining((prev) => (prev !== null ? prev - 1 : null));
-    }, 1000);
-
-    return () => clearTimeout(timerId);
-  }, [timeRemaining, router]);
-
-  const {data:messages, isPending: isMessagesPending} = useQuery({
+  // One authenticated bootstrap replaces the former TTL and history request
+  // waterfall. It also lets both Redis reads execute in parallel on the server.
+  const {data: roomData, isPending: isRoomPending} = useQuery({
     queryKey: ["messages",roomId],
     queryFn: async () => {
-       const res = await api.messages.get({query:{roomId}});
+       const res = await api.room.bootstrap.get({query:{roomId}});
        if (res.error) {
          if (res.status === 401) {
            router.push("/?error=unauthorized");
          } else {
            router.push("/?error=room-not-found");
          }
-         throw new Error("Failed to fetch messages");
+         throw new Error("Failed to bootstrap room");
        }
        return res.data;
     },
-    refetchInterval: false,
-    staleTime: Infinity
+    staleTime: Infinity,
   });
+
+  const messages = roomData as RoomBootstrap | undefined;
 
   useEffect(() => {
     if (bottomRef.current && messages?.messages) {
@@ -350,9 +350,7 @@ const Page = () => {
             <svg className="w-3 h-3 text-zinc-500 sm:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className={`text-xs font-mono font-semibold sm:font-medium leading-none ${timeRemaining !== null && timeRemaining < 60 ? "text-red-500 animate-pulse" : "text-zinc-300 sm:text-white"}`}>
-               {timeRemaining !== null ? formatTimeRemaining(timeRemaining) : "--:--"}
-            </span>
+            <RoomTimer key={roomData?.ttl} ttl={roomData?.ttl} onExpired={handleRoomExpiry} />
           </div>
 
           <div className="h-4 w-px bg-zinc-900 mx-0.5"></div>
@@ -378,7 +376,7 @@ const Page = () => {
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#18181b_1px,transparent_1px),linear-gradient(to_bottom,#18181b_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none opacity-50"></div>
         
         <div className="max-w-3xl mx-auto space-y-3 sm:space-y-4 md:space-y-6 landscape:space-y-2.5 relative z-10">
-          {isMessagesPending ? (
+          {isRoomPending ? (
             <div className="flex flex-col gap-4 animate-pulse py-12">
               <div className="flex gap-3 items-center">
                 <div className="w-8 h-8 rounded bg-zinc-900 border border-zinc-800"></div>

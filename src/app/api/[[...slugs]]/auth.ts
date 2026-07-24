@@ -22,7 +22,7 @@ export const authMiddleware = new Elysia({
     if (!roomId) {
         throw new AuthError("Missing roomId")
     }
-    const token = cookie[`x-auth-token-${roomId}`].value as string | undefined
+    const token = cookie[`x-auth-token-${roomId}`]?.value as string | undefined
     if(!token){
         throw new AuthError("Missing token")
     }
